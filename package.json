@@ -1,10 +1,14 @@
 {
   "name": "@thizjs/dev",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "The official development runtime for THIZ — a clean, fast backend framework.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/santhosh-2504/thizjs-dev.git"
+  },
   "bin": {
-    "this-dev": "bin/this-dev.js"
+    "thiz-dev": "bin/thiz-dev.js"
   },
   "files": [
     "bin/",

@@ -142,7 +142,7 @@ createWatcher({
 
 We welcome contributions! If you find a bug or want to add a feature:
 
-1. Fork the repo: [https://github.com/santhosh-2504/create-thiz-app](https://github.com/santhosh-2504/create-thiz-app)
+1. Fork the repo: [https://github.com/santhosh-2504/thizjs-dev](https://github.com/santhosh-2504/thizjs-dev)
 2. Create a branch: `git checkout -b feature/amazing-thing`
 3. Commit your changes: `git commit -m 'Add amazing thing'`
 4. Push and open a PR
