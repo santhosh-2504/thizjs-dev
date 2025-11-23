@@ -1,0 +1,29 @@
+{
+  "name": "@thizjs/dev",
+  "version": "0.0.3",
+  "description": "The official development runtime for THIZ — a clean, fast backend framework.",
+  "type": "module",
+  "bin": {
+    "this-dev": "bin/this-dev.js"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "keywords": [
+    "thiz",
+    "thizjs",
+    "dev-server",
+    "watcher",
+    "backend",
+    "framework",
+    "esm",
+    "express"
+  ],
+  "author": "Santhosh Kumar Anantha",
+  "license": "MIT",
+  "dependencies": {
+    "chokidar": "^4.0.0",
+    "chalk": "^5.2.0"
+  }
+}
