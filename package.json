@@ -9,7 +9,7 @@
   },
   "bin": {
     "thiz-dev": "dist/thiz-dev.js",
-    "thiz": "dist/thiz-routes.js"
+    "thiz-routes": "dist/thiz-routes.js"
   },
   "files": [
     "dist/"
@@ -37,7 +37,7 @@
     "open": "^10.0.0"
   },
   "peerDependencies": {
-    "@thizjs/express": "^1.0.2"
+    "@thizjs/express": "^1.0.3"
   },
   "devDependencies": {
     "esbuild": "^0.27.0"
