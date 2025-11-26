@@ -1,0 +1,7 @@
+src/
+bin/
+build.js
+node_modules/
+.git/
+*.log
+.DS_Store

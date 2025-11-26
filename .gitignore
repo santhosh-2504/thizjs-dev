@@ -10,3 +10,5 @@ logs/
 bower_components/
 # Environment variables
 .env
+
+*.tgz

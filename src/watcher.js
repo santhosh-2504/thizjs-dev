@@ -17,7 +17,7 @@ const __dirname = path.dirname(__filename);
  *  - ignore: array of globs to ignore
  *  - nodeArgs: array of node args (e.g. ["--enable-source-maps"])
  *  - env: object with env vars to merge into process.env for child
- *  - debounce: number ms (default 150)
+ *  - debounce: number ms (default 600)
  *  - verbose: boolean
  *
  * Returns an object with start() and stop()
@@ -30,15 +30,26 @@ export function createWatcher(opts = {}) {
     ignore = ["**/node_modules/**", "**/.git/**", "**/.cache/**"],
     nodeArgs = [],
     env = {},
-    debounce = 150,
+    debounce = 600,
     verbose = false,
   } = opts;
 
   let child = null;
   let restartTimer = null;
   let shuttingDown = false;
+  let isRestarting = false;
+  let isGracefulKill = false;
+  let consecutiveCrashes = 0;
+  let pendingRestartReason = null;
+  
+  const STARTUP_TIMEOUT = 3000;
 
   function spawnChild() {
+    if (shuttingDown) {
+      if (verbose) console.log(chalk.gray("[THIZ-DEV] Spawn blocked - shutting down"));
+      return;
+    }
+
     const entryPath = path.resolve(process.cwd(), entry);
     if (verbose) console.log(chalk.gray(`Spawning node ${entryPath}`));
 
@@ -48,58 +59,164 @@ export function createWatcher(opts = {}) {
       env: { ...process.env, ...env },
     });
 
-    child.on("exit", (code, signal) => {
+    const startTime = Date.now();
+    let successTimer = null;
+
+    const handleExit = (code, signal) => {
+      if (successTimer) clearTimeout(successTimer);
+      
       if (shuttingDown) return;
+
+      const uptime = Date.now() - startTime;
       const reason = signal ? `signal ${signal}` : `code ${code}`;
-      console.log(chalk.yellow(`[THIZ-DEV] server exited (${reason})`));
-      // if it exited unexpectedly, keep watcher running — restart on next change
-    });
+
+      // If this was a graceful kill (restart), don't treat as crash
+      if (isGracefulKill) {
+        if (verbose) console.log(chalk.gray(`[THIZ-DEV] Server stopped for restart (${reason})`));
+        isGracefulKill = false;
+        child = null;
+        return;
+      }
+
+      // Crashed quickly = likely syntax error or startup issue
+      if (uptime < STARTUP_TIMEOUT && code !== 0) {
+        consecutiveCrashes++;
+        
+        console.log(chalk.red(`[THIZ-DEV] Server crashed (${consecutiveCrashes}x) after ${uptime}ms - ${reason}`));
+        
+        if (consecutiveCrashes >= 3) {
+          console.log(chalk.yellow("[THIZ-DEV] Multiple crashes detected. Waiting for file to stabilize..."));
+        } else {
+          console.log(chalk.yellow("[THIZ-DEV] Waiting for next valid file change..."));
+        }
+        
+        child = null;
+        return;
+      }
+
+      // Normal unexpected exit
+      consecutiveCrashes = 0;
+      console.log(chalk.yellow(`[THIZ-DEV] Server exited unexpectedly (${reason})`));
+      child = null;
+    };
+
+    // Track successful startup
+    successTimer = setTimeout(() => {
+      consecutiveCrashes = 0;
+      if (verbose) console.log(chalk.gray("[THIZ-DEV] Server running stably"));
+    }, STARTUP_TIMEOUT);
+
+    child.on("exit", handleExit);
 
     child.on("error", (err) => {
-      console.error(chalk.red("[THIZ-DEV] child process error:"), err);
+      if (successTimer) clearTimeout(successTimer);
+      console.error(chalk.red("[THIZ-DEV] Child process error:"), err);
+      consecutiveCrashes++;
+      child = null;
     });
 
-    console.log(chalk.green(`[THIZ-DEV] started server (pid: ${child.pid})`));
+    console.log(chalk.green(`[THIZ-DEV] Started server (pid: ${child.pid})`));
   }
 
-  function killChild() {
+  async function killChild() {
+    if (!child || child.killed) {
+      child = null;
+      return;
+    }
+
+    isGracefulKill = true;
+
     return new Promise((resolve) => {
-      if (!child || child.killed) return resolve();
-      // Try graceful SIGTERM first
+      const killTimeout = setTimeout(() => {
+        try {
+          if (child && !child.killed) {
+            if (verbose) console.log(chalk.gray("[THIZ-DEV] Force killing server"));
+            child.kill("SIGKILL");
+          }
+        } catch (e) {
+          // Ignore
+        }
+        resolve();
+      }, 2000);
+
+      const cleanup = () => {
+        clearTimeout(killTimeout);
+        child = null;
+        resolve();
+      };
+
+      child.once("exit", cleanup);
+
       try {
         child.kill("SIGTERM");
       } catch (e) {
-        // ignore
+        cleanup();
       }
 
-      // Wait up to 1s for exit, then force
-      const timeout = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch (e) {}
-      }, 1000);
-
-      child.once("exit", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-
-      // In case child already exited synchronously
-      if (child.killed) resolve();
+      if (child && child.killed) {
+        cleanup();
+      }
     });
   }
 
+  async function performRestart(reason) {
+    if (shuttingDown) return;
+
+    console.log(chalk.cyan(`[THIZ-DEV] Restarting — ${reason}`));
+
+    try {
+      await killChild();
+      await new Promise(resolve => setTimeout(resolve, 150));
+      
+      if (!shuttingDown) {
+        spawnChild();
+      }
+    } catch (err) {
+      console.error(chalk.red("[THIZ-DEV] Restart error:"), err);
+      isGracefulKill = false;
+    }
+  }
+
   async function restart(reason = "file change") {
-    if (restartTimer) clearTimeout(restartTimer);
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
+
+    if (isRestarting) {
+      pendingRestartReason = reason;
+      if (verbose) console.log(chalk.gray(`[THIZ-DEV] Restart pending - ${reason}`));
+      return;
+    }
+
+    // Increase debounce after consecutive crashes
+    const effectiveDebounce = consecutiveCrashes >= 3 ? debounce * 2 : debounce;
 
     restartTimer = setTimeout(async () => {
-      console.log(chalk.cyan(`[THIZ-DEV] restarting — ${reason}`));
-      await killChild();
-      if (!shuttingDown) spawnChild();
-    }, debounce);
+      restartTimer = null;
+      
+      if (isRestarting) {
+        pendingRestartReason = reason;
+        return;
+      }
+
+      isRestarting = true;
+      pendingRestartReason = null;
+
+      await performRestart(reason);
+
+      isRestarting = false;
+
+      if (pendingRestartReason && !shuttingDown) {
+        const nextReason = pendingRestartReason;
+        pendingRestartReason = null;
+        setTimeout(() => restart(nextReason), 100);
+      }
+    }, effectiveDebounce);
   }
 
   let watcher = null;
+  let recentChanges = new Map();
 
   function start() {
     if (watcher) return;
@@ -110,47 +227,79 @@ export function createWatcher(opts = {}) {
       ignored: ignore,
       ignoreInitial: true,
       awaitWriteFinish: {
-        stabilityThreshold: 100,
-        pollInterval: 10,
+        stabilityThreshold: 500,
+        pollInterval: 100,
       },
     });
 
     watcher.on("all", (ev, filePath) => {
-      // ignore changes inside node_modules or hidden tmp files
       const relative = path.relative(process.cwd(), filePath);
-      if (relative.startsWith("node_modules") || relative.startsWith(".git")) return;
+      
+      if (relative.startsWith("node_modules") || relative.startsWith(".git")) {
+        return;
+      }
+
+      if (relative.includes("~") || relative.endsWith(".swp") || relative.endsWith(".tmp")) {
+        return;
+      }
 
       if (verbose) console.log(chalk.gray(`[THIZ-DEV] ${ev} — ${relative}`));
+
+      const changeKey = `${relative}`;
+      const now = Date.now();
+      
+      if (recentChanges.has(changeKey)) {
+        const lastTime = recentChanges.get(changeKey);
+        if (now - lastTime < 100) {
+          return;
+        }
+      }
+      
+      recentChanges.set(changeKey, now);
+
+      if (recentChanges.size > 100) {
+        const cutoff = now - 10000;
+        for (const [key, time] of recentChanges.entries()) {
+          if (time < cutoff) recentChanges.delete(key);
+        }
+      }
+
       restart(`${ev} ${relative}`);
     });
 
     watcher.on("error", (err) => {
-      console.error(chalk.red("[THIZ-DEV] watcher error:"), err);
+      console.error(chalk.red("[THIZ-DEV] Watcher error:"), err);
     });
 
-    process.once("SIGINT", async () => {
-      console.log(chalk.yellow("\n[THIZ-DEV] SIGINT received — shutting down..."));
+    const handleShutdown = async (signal) => {
+      console.log(chalk.yellow(`\n[THIZ-DEV] ${signal} received — shutting down...`));
       await stop();
       process.exit(0);
-    });
+    };
 
-    process.once("SIGTERM", async () => {
-      console.log(chalk.yellow("\n[THIZ-DEV] SIGTERM received — shutting down..."));
-      await stop();
-      process.exit(0);
-    });
+    process.once("SIGINT", () => handleShutdown("SIGINT"));
+    process.once("SIGTERM", () => handleShutdown("SIGTERM"));
 
-    console.log(chalk.blue(`[THIZ-DEV] watching ${Array.isArray(watch) ? watch.join(", ") : watch}`));
+    console.log(chalk.blue(`[THIZ-DEV] Watching ${Array.isArray(watch) ? watch.join(", ") : watch}`));
   }
 
   async function stop() {
     shuttingDown = true;
+    
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
+    
     if (watcher) {
       await watcher.close();
       watcher = null;
     }
+    
+    isGracefulKill = true;
     await killChild();
-    console.log(chalk.yellow("[THIZ-DEV] stopped"));
+    
+    console.log(chalk.yellow("[THIZ-DEV] Stopped"));
   }
 
   return { start, stop, restart: () => restart("manual") };

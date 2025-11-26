@@ -1,6 +1,6 @@
 {
   "name": "@thizjs/dev",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "The official development runtime for THIZ — a clean, fast backend framework.",
   "type": "module",
   "repository": {
@@ -8,12 +8,15 @@
     "url": "git+https://github.com/santhosh-2504/thizjs-dev.git"
   },
   "bin": {
-    "thiz-dev": "bin/thiz-dev.js"
+    "thiz-dev": "dist/thiz-dev.js"
   },
   "files": [
-    "bin/",
-    "src/"
+    "dist/"
   ],
+  "scripts": {
+    "build": "node build.js",
+    "prepublishOnly": "npm run build"
+  },
   "keywords": [
     "thiz",
     "thizjs",
@@ -27,7 +30,10 @@
   "author": "Santhosh Kumar Anantha",
   "license": "MIT",
   "dependencies": {
-    "chokidar": "^4.0.0",
-    "chalk": "^5.2.0"
+    "chalk": "^5.2.0",
+    "chokidar": "^4.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.0"
   }
 }
