@@ -4,6 +4,7 @@ import chokidar from "chokidar";
 import path from "path";
 import { fileURLToPath } from "url";
 import chalk from "chalk";
+import { loadEnv, watchEnv } from "./env-loader.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,6 +20,7 @@ const __dirname = path.dirname(__filename);
  *  - env: object with env vars to merge into process.env for child
  *  - debounce: number ms (default 600)
  *  - verbose: boolean
+ *  - restartOnEnvChange: boolean (default true) - restart server when .env files change
  *
  * Returns an object with start() and stop()
  */
@@ -32,6 +34,7 @@ export function createWatcher(opts = {}) {
     env = {},
     debounce = 600,
     verbose = false,
+    restartOnEnvChange = true,
   } = opts;
 
   let child = null;
@@ -41,8 +44,12 @@ export function createWatcher(opts = {}) {
   let isGracefulKill = false;
   let consecutiveCrashes = 0;
   let pendingRestartReason = null;
+  let envWatcher = null;
   
   const STARTUP_TIMEOUT = 3000;
+
+  // Load env vars on startup
+  loadEnv();
 
   function spawnChild() {
     if (shuttingDown) {
@@ -54,9 +61,18 @@ export function createWatcher(opts = {}) {
     if (verbose) console.log(chalk.gray(`Spawning node ${entryPath}`));
 
     const args = [...nodeArgs, entryPath];
+    
+    // Merge loaded env vars with custom env and process.env
+    const childEnv = { 
+      ...process.env,
+      ...env,
+      // Add flag so child process knows it's running under thiz-dev
+      THIZ_DEV: "true"
+    };
+
     child = spawn(process.execPath, args, {
       stdio: ["inherit", "inherit", "inherit"],
-      env: { ...process.env, ...env },
+      env: childEnv,
     });
 
     const startTime = Date.now();
@@ -162,8 +178,6 @@ export function createWatcher(opts = {}) {
   async function performRestart(reason) {
     if (shuttingDown) return;
 
-    console.log(chalk.cyan(`[THIZ-DEV] Restarting — ${reason}`));
-
     try {
       await killChild();
       await new Promise(resolve => setTimeout(resolve, 150));
@@ -223,8 +237,31 @@ export function createWatcher(opts = {}) {
 
     spawnChild();
 
+    // Setup env hot-reloading if enabled
+if (restartOnEnvChange) {
+  watchEnv((newEnv, event, fileName) => {
+    if (verbose) {
+      const keys = Object.keys(newEnv);
+      console.log(chalk.gray(`[THIZ-DEV] Loaded ${keys.length} env vars from ${fileName}`));
+    }
+    // Trigger restart so child process gets new env vars
+    restart(`env change: ${fileName}`);
+  }).then(w => {
+        envWatcher = w;
+      });
+    }
+
+    // Add .env files to ignore list
+    const envIgnorePatterns = [
+      "**/.env",
+      "**/.env.local",
+      "**/.env.development",
+      "**/.env.production",
+      "**/.env.*",
+    ];
+
     watcher = chokidar.watch(watch, {
-      ignored: ignore,
+      ignored: [...ignore, ...envIgnorePatterns],
       ignoreInitial: true,
       awaitWriteFinish: {
         stabilityThreshold: 500,
@@ -240,6 +277,11 @@ export function createWatcher(opts = {}) {
       }
 
       if (relative.includes("~") || relative.endsWith(".swp") || relative.endsWith(".tmp")) {
+        return;
+      }
+
+      // Skip .env files (handled separately)
+      if (relative.startsWith(".env")) {
         return;
       }
 
@@ -281,7 +323,11 @@ export function createWatcher(opts = {}) {
     process.once("SIGTERM", () => handleShutdown("SIGTERM"));
 
     console.log(chalk.blue(`[THIZ-DEV] Watching ${Array.isArray(watch) ? watch.join(", ") : watch}`));
+    
+if (restartOnEnvChange) {
+  console.log(chalk.blue("[THIZ-DEV] Server will restart on .env file changes"));
   }
+}
 
   async function stop() {
     shuttingDown = true;
@@ -294,6 +340,11 @@ export function createWatcher(opts = {}) {
     if (watcher) {
       await watcher.close();
       watcher = null;
+    }
+
+    if (envWatcher) {
+      await envWatcher.close();
+      envWatcher = null;
     }
     
     isGracefulKill = true;
