@@ -1,6 +1,6 @@
 {
   "name": "@thizjs/dev",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "The official development runtime for THIZ — a clean, fast backend framework.",
   "type": "module",
   "repository": {
@@ -8,7 +8,8 @@
     "url": "git+https://github.com/santhosh-2504/thizjs-dev.git"
   },
   "bin": {
-    "thiz-dev": "dist/thiz-dev.js"
+    "thiz-dev": "dist/thiz-dev.js",
+    "thiz": "dist/thiz-routes.js"
   },
   "files": [
     "dist/"
@@ -31,7 +32,12 @@
   "license": "MIT",
   "dependencies": {
     "chalk": "^5.2.0",
-    "chokidar": "^4.0.0"
+    "chokidar": "^4.0.0",
+    "express": "^4.18.0",
+    "open": "^10.0.0"
+  },
+  "peerDependencies": {
+    "@thizjs/express": "^1.0.2"
   },
   "devDependencies": {
     "esbuild": "^0.27.0"

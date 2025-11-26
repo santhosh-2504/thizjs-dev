@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { mkdirSync, rmSync, chmodSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, chmodSync, writeFileSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -17,7 +17,7 @@ mkdirSync(join(__dirname, 'dist'), { recursive: true });
 
 console.log('🔨 Building @thizjs/dev...');
 
-// Build the watcher module
+// Build the watcher module first
 await build({
   entryPoints: ['src/watcher.js'],
   bundle: true,
@@ -25,22 +25,23 @@ await build({
   target: 'node14',
   format: 'esm',
   outfile: 'dist/watcher.js',
-  external: ['chokidar', 'chalk'], // Keep dependencies external
+  external: ['chokidar', 'chalk'],
   minify: true,
   sourcemap: false,
 });
 
 console.log('✓ Built watcher.js');
 
-// Create a temporary CLI file WITHOUT shebang for bundling
-const cliSource = readFileSync('bin/thiz-dev.js', 'utf-8');
-const cliWithoutShebang = cliSource.replace(/^#!\/usr\/bin\/env node\s*\n/m, '');
-const tempCliPath = join(__dirname, 'bin', '.thiz-dev.temp.js');
-writeFileSync(tempCliPath, cliWithoutShebang);
-
 // Build the CLI entry point
+// Create a temporary entry that imports from the BUILT watcher
+const cliEntry = `import { createWatcher } from "./dist/watcher.js";
+createWatcher({ entry: "src/server.js" }).start();`;
+
+const tempEntry = join(__dirname, '.build-entry.js');
+writeFileSync(tempEntry, cliEntry);
+
 await build({
-  entryPoints: ['bin/.thiz-dev.temp.js'],
+  entryPoints: ['.build-entry.js'],
   bundle: true,
   platform: 'node',
   target: 'node14',
@@ -50,14 +51,37 @@ await build({
   minify: true,
   sourcemap: false,
   banner: {
-    js: '#!/usr/bin/env node\n',
+    js: '#!/usr/bin/env node',
   },
 });
 
 // Clean up temp file
-rmSync(tempCliPath, { force: true });
+rmSync(tempEntry, { force: true });
 
 console.log('✓ Built thiz-dev.js');
+
+// Build the routes inspector command if it exists
+try {
+  await build({
+    entryPoints: ['bin/thiz-routes.js'],
+    bundle: true,
+    platform: 'node',
+    target: 'node16', // Changed from node14 for top-level await support
+    format: 'esm',
+    outfile: 'dist/thiz-routes.js',
+    external: ['@thizjs/express', 'express', 'chalk', 'open'],
+    minify: true,
+    sourcemap: false,
+    banner: {
+      js: '#!/usr/bin/env node',
+    },
+  });
+  
+  chmodSync(join(__dirname, 'dist/thiz-routes.js'), 0o755);
+  console.log('✓ Built thiz-routes.js');
+} catch (e) {
+  console.log('⚠ Skipping thiz-routes.js (file not found)');
+}
 
 // Make the CLI executable
 chmodSync(join(__dirname, 'dist/thiz-dev.js'), 0o755);
